@@ -107,10 +107,9 @@ async function uninstallAddons(ids: string[]) {
     for (const id of ids) {
         const addon = db.installed.find(addon => addon.id == id);
         if (addon) {
-            //delete folder
+            db.uninstall(addon);
         }
     }
-
 }
 
 async function exportInstalled(path: string) {

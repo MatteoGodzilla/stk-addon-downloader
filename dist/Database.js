@@ -15,8 +15,6 @@ const ONLINE_URL = "https://online.supertuxkart.net/dl/xml/";
 const FILES_FOLDER = "files/";
 const NEWS_FILE = "online_news.xml";
 const ADDONS_FILE = "addons.xml";
-//TODO: THIS WONT WORK ON WINDOWS
-const INSTALL_DIR = os_1.default.homedir() + "/.local/share/supertuxkart/addons/";
 class Database {
     karts = [];
     tracks = [];
@@ -25,8 +23,10 @@ class Database {
     raw;
     initialized = false;
     queue = [];
+    installationFolder = "";
     async Init(forceRefresh) {
         if (!this.initialized) {
+            forceRefresh = forceRefresh || this.checkRequiredFiles();
             if (forceRefresh) {
                 console.log("Downloading assets from server");
                 await this.downloadNewsFile();
@@ -67,7 +67,7 @@ class Database {
                     });
                     res.on("end", async () => {
                         fileStream.close();
-                        const destFolder = path_1.default.join(INSTALL_DIR, addon.type == Addon_1.AddonType.KART ? "karts" : "tracks", addon.id);
+                        const destFolder = this.getSubfolder(addon);
                         console.log(`Extracting to ${destFolder}`);
                         (0, extract_zip_1.default)(zipPath, { dir: destFolder }).then(resolve).catch(reject);
                     });
@@ -76,28 +76,19 @@ class Database {
                         reject();
                     });
                 });
-                /*
-                this.webRequest(addon.file).then((res) => {
-                    res.on("data", (chunk) => {
-                        fileStream.write(chunk);
-                    });
-                    res.on("end", async () => {
-                        fileStream.close();
-                        const destFolder = path.join(INSTALL_DIR, addon.type == AddonType.KART ? "karts" : "tracks", addon.id);
-                        console.log(`Extracting to ${destFolder}`);
-                        extractZip(zipPath, { dir: destFolder }).then(resolve).catch(reject);
-                    });
-                    res.on("error", (err) => {
-                        console.error(`There was an error installing ${addon.id}: ${err}`);
-                        reject();
-                    });
-                });
-                */
             }));
         }
         return Promise.allSettled(promises);
     }
-    async uninstall(id) {
+    async uninstall(toRemove) {
+        const index = this.installed.findIndex(addon => addon == toRemove);
+        if (index >= 0) {
+            //actual valid addon
+            this.installed.splice(index, 1);
+            const folderPath = this.getSubfolder(toRemove);
+            (0, fs_1.rmSync)(folderPath, { recursive: true });
+            console.log(`Successfully removed addon ${toRemove.id}`);
+        }
     }
     AddonToString(addon) {
         const typeString = addon.type == Addon_1.AddonType.KART ? "Kart " : addon.type == Addon_1.AddonType.TRACK ? "Track" : "Arena";
@@ -147,17 +138,42 @@ class Database {
     }
     async loadInstalled() {
         console.log("Loaded installed addons ");
+        switch (os_1.default.platform()) {
+            case "win32":
+                this.installationFolder = path_1.default.join(process.env.APPDATA, "supertuxkart/addons");
+                break;
+            case "linux":
+                this.installationFolder = path_1.default.join(os_1.default.homedir(), "/.local/share/supertuxkart/addons/");
+                break;
+        }
         //we know the folders below contain only subfolders
-        if (!(0, fs_1.existsSync)(INSTALL_DIR + "karts"))
-            (0, fs_1.mkdirSync)(INSTALL_DIR + "karts");
-        if (!(0, fs_1.existsSync)(INSTALL_DIR + "tracks"))
-            (0, fs_1.mkdirSync)(INSTALL_DIR + "tracks");
-        const installedKartIds = (0, fs_1.readdirSync)(INSTALL_DIR + "karts");
-        const installedTrackIds = (0, fs_1.readdirSync)(INSTALL_DIR + "tracks");
+        const kartSubfolder = path_1.default.join(this.installationFolder, "karts");
+        const trackSubfolder = path_1.default.join(this.installationFolder, "tracks");
+        if (!(0, fs_1.existsSync)(kartSubfolder))
+            (0, fs_1.mkdirSync)(kartSubfolder);
+        if (!(0, fs_1.existsSync)(trackSubfolder))
+            (0, fs_1.mkdirSync)(trackSubfolder);
+        const installedKartIds = (0, fs_1.readdirSync)(kartSubfolder);
+        const installedTrackIds = (0, fs_1.readdirSync)(trackSubfolder);
         const kartsInstalled = this.karts.filter(kart => installedKartIds.includes(kart.id));
         const tracksInstsalled = this.tracks.filter(track => installedTrackIds.includes(track.id));
         const arenasInstalled = this.arenas.filter(arena => installedTrackIds.includes(arena.id));
         this.installed = kartsInstalled.concat(tracksInstsalled).concat(arenasInstalled);
+    }
+    //returns true when a refresh is needed
+    checkRequiredFiles() {
+        if (!(0, fs_1.existsSync)(FILES_FOLDER)) {
+            (0, fs_1.mkdirSync)(FILES_FOLDER);
+            return true;
+        }
+        if (!(0, fs_1.existsSync)(path_1.default.join(FILES_FOLDER, NEWS_FILE)))
+            return true;
+        if (!(0, fs_1.existsSync)(path_1.default.join(FILES_FOLDER, ADDONS_FILE)))
+            return true;
+        return false;
+    }
+    getSubfolder(addon) {
+        return path_1.default.join(this.installationFolder, addon.type == Addon_1.AddonType.KART ? "karts" : "tracks", addon.id);
     }
 }
 exports.Database = Database;
