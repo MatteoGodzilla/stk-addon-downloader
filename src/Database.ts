@@ -70,7 +70,10 @@ export class Database {
                         fileStream.close();
                         const destFolder = this.getSubfolder(addon);
                         console.log(`Extracting to ${destFolder}`);
-                        extractZip(zipPath, { dir: destFolder }).then(resolve).catch(reject);
+                        extractZip(zipPath, { dir: destFolder }).then(() => {
+                            rmSync(zipPath);
+                            resolve();
+                        }).catch(reject);
                     });
                     res.on("error", (err) => {
                         console.error(`There was an error installing ${addon.id}: ${err}`);
@@ -104,25 +107,25 @@ export class Database {
     //PRIVATE METHODS
 
     private async downloadNewsFile() {
-        const response = await fetch(ONLINE_URL + NEWS_FILE);
+        const response = await fetch(path.join(ONLINE_URL, NEWS_FILE));
         const text = await response.text();
-        writeFileSync(FILES_FOLDER + NEWS_FILE, text);
+        writeFileSync(path.join(FILES_FOLDER, NEWS_FILE), text);
         console.log("Written online_news.xml");
     }
 
     private async downloadAddonsFile() {
-        const newsXml = readFileSync(FILES_FOLDER + NEWS_FILE).toString();
+        const newsXml = readFileSync(path.join(FILES_FOLDER, NEWS_FILE)).toString();
         const news = await xml2js.parseStringPromise(newsXml);
         const url = news["news"]["include"][0]["$"]["file"];
         const response = await fetch(url);
         const text = await response.text();
-        writeFileSync(FILES_FOLDER + ADDONS_FILE, text);
+        writeFileSync(path.join(FILES_FOLDER, ADDONS_FILE), text);
         console.log("Written addons.xml");
     }
 
     private async parseAddons() {
         console.log("Loaded Addons from " + ADDONS_FILE);
-        const xmlText = readFileSync(FILES_FOLDER + ADDONS_FILE).toString();
+        const xmlText = readFileSync(path.join(FILES_FOLDER, ADDONS_FILE)).toString();
         const obj = await xml2js.parseStringPromise(xmlText);
         this.raw = obj["assets"];
         for (const dollarKart of this.raw["kart"]) {
