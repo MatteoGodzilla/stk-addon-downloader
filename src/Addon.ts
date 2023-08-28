@@ -23,7 +23,7 @@ export enum AddonStatus {
 
 export class Addon {
     type: AddonType;
-    id: string = "";
+    id = "";
     name = "";
     file = "";
     date = 0;

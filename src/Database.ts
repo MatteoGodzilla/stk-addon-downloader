@@ -1,10 +1,9 @@
 import { Addon, AddonType } from "./Addon";
-import { createWriteStream, existsSync, mkdirSync, rmSync, readdirSync, writeFileSync, readFileSync } from "fs";
+import fsync from "fs";
+import fs from "fs/promises";
 import path from "path";
 import xml2js from "xml2js";
 import os from "os";
-import { get } from "https";
-import { IncomingMessage } from "http";
 import extractZip from "extract-zip";
 
 const ONLINE_URL = "https://online.supertuxkart.net/dl/xml/";
@@ -20,12 +19,11 @@ export class Database {
     private raw: any;
     private initialized = false;
     private queue: Addon[] = [];
-    private installationFolder: string = "";
+    private installationFolder = "";
 
-    async Init(forceRefresh: boolean): Promise<Database> {
+    async Init() {
         if (!this.initialized) {
-            forceRefresh = forceRefresh || this.checkRequiredFiles();
-            if (forceRefresh) {
+            if (this.checkRequiredFiles()) {
                 console.log("Downloading assets from server");
                 await this.downloadNewsFile();
                 await this.downloadAddonsFile();
@@ -37,53 +35,32 @@ export class Database {
         return this;
     }
 
-    private webRequest(url: string): Promise<IncomingMessage> {
-        return new Promise((resolve, _) => {
-            get(url, (res) => {
-                if (res.statusCode && res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
-                    this.webRequest(res.headers.location).then(resolve);
-                } else {
-                    resolve(res);
-                }
-            });
-        });
-    }
-
     AddToQueue(addon: Addon) {
         this.queue.push(addon);
     }
 
     async ProcessQueue() {
-        const promises: Promise<void>[] = [];
         for (const addon of this.queue) {
-            promises.push(new Promise<void>((resolve, reject) => {
-                console.log(`* Installing ${addon.id}`);
-                const fileName = path.basename(addon.file);
-                const zipPath = path.join(FILES_FOLDER, fileName);
-                const fileStream = createWriteStream(zipPath);
+            console.log(`* Downloading zip for ${addon.id}`);
+            const fileName = path.basename(addon.file);
+            const zipPath = path.join(FILES_FOLDER, fileName);
 
-                this.webRequest(addon.file).then((res) => {
-                    res.on("data", (chunk) => {
-                        fileStream.write(chunk);
-                    });
-                    res.on("end", async () => {
-                        fileStream.close();
-                        const destFolder = this.getSubfolder(addon);
-                        console.log(`Extracting to ${destFolder}`);
-                        extractZip(zipPath, { dir: destFolder }).then(() => {
-                            rmSync(zipPath);
-                            resolve();
-                        }).catch(reject);
-                    });
-                    res.on("error", (err) => {
-                        console.error(`There was an error installing ${addon.id}: ${err}`);
-                        reject();
-                    });
+            await fetch(addon.file)
+                .then(res => res.arrayBuffer())
+                .then((arrayBuffer) => {
+                    const buffer = Buffer.from(arrayBuffer);
+                    return fs.writeFile(zipPath, buffer);
+                })
+                .then(() => {
+                    const destFolder = this.getSubfolder(addon);
+                    console.log(`** Extracting to ${destFolder}`);
+                    return extractZip(zipPath, { dir: destFolder, });
+                })
+                .catch(err => console.error(`There was an error downloading ${addon.id}: ${err}`))
+                .then(() => {
+                    fsync.rmSync(zipPath);
                 });
-            }));
         }
-
-        return Promise.allSettled(promises);
     }
 
     async uninstall(toRemove: Addon) {
@@ -92,7 +69,7 @@ export class Database {
             //actual valid addon
             this.installed.splice(index, 1);
             const folderPath = this.getSubfolder(toRemove);
-            rmSync(folderPath, { recursive: true });
+            fsync.rmSync(folderPath, { recursive: true });
             console.log(`Successfully removed addon ${toRemove.id}`);
         }
     }
@@ -109,23 +86,23 @@ export class Database {
     private async downloadNewsFile() {
         const response = await fetch(path.join(ONLINE_URL, NEWS_FILE));
         const text = await response.text();
-        writeFileSync(path.join(FILES_FOLDER, NEWS_FILE), text);
+        await fs.writeFile(path.join(FILES_FOLDER, NEWS_FILE), text)
         console.log("Written online_news.xml");
     }
 
     private async downloadAddonsFile() {
-        const newsXml = readFileSync(path.join(FILES_FOLDER, NEWS_FILE)).toString();
+        const newsXml = (await fs.readFile(path.join(FILES_FOLDER, NEWS_FILE))).toString();
         const news = await xml2js.parseStringPromise(newsXml);
         const url = news["news"]["include"][0]["$"]["file"];
         const response = await fetch(url);
         const text = await response.text();
-        writeFileSync(path.join(FILES_FOLDER, ADDONS_FILE), text);
+        await fs.writeFile(path.join(FILES_FOLDER, ADDONS_FILE), text);
         console.log("Written addons.xml");
     }
 
     private async parseAddons() {
         console.log("Loaded Addons from " + ADDONS_FILE);
-        const xmlText = readFileSync(path.join(FILES_FOLDER, ADDONS_FILE)).toString();
+        const xmlText = (await fs.readFile(path.join(FILES_FOLDER, ADDONS_FILE))).toString();
         const obj = await xml2js.parseStringPromise(xmlText);
         this.raw = obj["assets"];
         for (const dollarKart of this.raw["kart"]) {
@@ -163,33 +140,50 @@ export class Database {
         const kartSubfolder = path.join(this.installationFolder, "karts");
         const trackSubfolder = path.join(this.installationFolder, "tracks");
 
-        if (!existsSync(kartSubfolder)) mkdirSync(kartSubfolder);
-        if (!existsSync(trackSubfolder)) mkdirSync(trackSubfolder);
+        if (!fsync.existsSync(kartSubfolder)) await fs.mkdir(kartSubfolder);
+        if (!fsync.existsSync(trackSubfolder)) await fs.mkdir(trackSubfolder);
 
-        const installedKartIds = readdirSync(kartSubfolder);
-        const installedTrackIds = readdirSync(trackSubfolder);
+        this.installed = [];
 
-        const kartsInstalled = this.karts.filter(kart => installedKartIds.includes(kart.id));
-        const tracksInstsalled = this.tracks.filter(track => installedTrackIds.includes(track.id));
-        const arenasInstalled = this.arenas.filter(arena => installedTrackIds.includes(arena.id));
+        await fs.readdir(kartSubfolder)
+            .then(folders => {
+                for (const folder of folders) {
+                    if (fsync.existsSync(path.join(kartSubfolder, folder, "kart.xml"))) {
+                        const addon = this.karts.find(kart => kart.id == folder);
+                        if (addon) this.installed.push(addon);
+                    }
+                }
+            });
 
-        this.installed = kartsInstalled.concat(tracksInstsalled).concat(arenasInstalled);
+        await fs.readdir(trackSubfolder)
+            .then(folders => {
+                for (const folder of folders) {
+                    if (fsync.existsSync(path.join(trackSubfolder, folder, "track.xml"))) {
+                        let addon = this.tracks.find(track => track.id == folder);
+                        if (!addon)
+                            addon = this.arenas.find(arena => arena.id == folder);
+
+                        if (addon)
+                            this.installed.push(addon);
+                    }
+                }
+            });
     }
 
     //returns true when a refresh is needed
-    private checkRequiredFiles(): boolean {
-        if (!existsSync(FILES_FOLDER)) {
-            mkdirSync(FILES_FOLDER);
+    private checkRequiredFiles() {
+        if (!fsync.existsSync(FILES_FOLDER)) {
+            fsync.mkdirSync(FILES_FOLDER);
             return true;
         }
-        if (!existsSync(path.join(FILES_FOLDER, NEWS_FILE)))
+        if (!fsync.existsSync(path.join(FILES_FOLDER, NEWS_FILE)))
             return true;
-        if (!existsSync(path.join(FILES_FOLDER, ADDONS_FILE)))
+        if (!fsync.existsSync(path.join(FILES_FOLDER, ADDONS_FILE)))
             return true;
         return false;
     }
 
-    private getSubfolder(addon:Addon): string{
+    private getSubfolder(addon: Addon) {
         return path.join(this.installationFolder, addon.type == AddonType.KART ? "karts" : "tracks", addon.id);
     }
 

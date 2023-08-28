@@ -1,56 +1,68 @@
 #!/usr/bin/env node
-import { program } from "commander";
+import { program, Option } from "commander";
 import { Database } from "./Database";
 import { Addon, AddonStatus } from "./Addon";
-import { writeFileSync, readFileSync, rmdirSync } from "fs";
+import { writeFileSync, readFileSync } from "fs";
 
 const db = new Database();
 
-async function search(name: string) {
+async function search() {
     const options = program.opts();
-    await db.Init(options.r);
-    if (!options.k && !options.t && !options.a)
-        options.e = true;
+    if (!options.kart && !options.track && !options.arena)
+        options.everything = true;
+    await db.Init();
 
     let searching: Addon[] = [];
-    if (options.k || options.e)
+    if (options.kart || options.everything)
         searching = searching.concat(db.karts);
-    if (options.t || options.e)
+    if (options.track || options.everything)
         searching = searching.concat(db.tracks);
-    if (options.a || options.e)
+    if (options.arena || options.everything)
         searching = searching.concat(db.arenas);
 
-    if (options.f)
+    if (options.featured)
         searching = searching.filter(addon => addon.status.includes(AddonStatus.FEATURED));
+
+    if (options.name) {
+        searching = searching.filter(addon => {
+            return addon.id.includes(options.name) || addon.name.includes(options.name) ||
+                addon.uploader.includes(options.name) || addon.designer.includes(options.name) ||
+                addon.description.includes(options.name);
+        });
+    }
 
     const result: string[] = [];
 
-    for (const addon of searching) {
-        if (addon.id.includes(name) || addon.name.includes(name) || addon.uploader.includes(name) ||
-            addon.designer.includes(name) || addon.description.includes(name)) {
+    if (options.i) {
+        let str = "Ids found: ";
+        for(const addon of searching){
+            str += addon.id + " ";
+            result.push(addon.id);
+        }
+        console.log(str);
+        installAddons(result);
+    } else {
+        for (const addon of searching) {
             console.log(db.AddonToString(addon));
             result.push(addon.id);
         }
     }
 
-    if (options.i) {
-        installAddons(result);
-    }
 }
 
 async function info(id: string) {
     const options = program.opts();
-    await db.Init(options.r);
-    if (!options.k && !options.t && !options.a)
-        options.e = true;
+    if (!options.kart && !options.track && !options.arena)
+        options.everything = true;
+
+    await db.Init();
 
     let searching: Addon[] = [];
-
-    if (options.k || options.e)
+    if (options.kart || options.everything)
         searching = searching.concat(db.karts);
-    if (options.t || options.e)
+    if (options.track || options.everything)
         searching = searching.concat(db.tracks);
-    if (options.a || options.e)
+    if (options.arena || options.everything)
         searching = searching.concat(db.arenas);
 
     for (const addon of searching) {
@@ -61,8 +73,7 @@ async function info(id: string) {
 }
 
 async function list() {
-    const options = program.opts();
-    await db.Init(options.r);
+    await db.Init();
     for (const addon of db.installed) {
         console.log(db.AddonToString(addon));
     }
@@ -70,12 +81,10 @@ async function list() {
 
 async function installAddons(ids: string[]) {
     const options = program.opts();
-    await db.Init(options.r);
-    if (!options.k && !options.t && !options.a)
-        options.e = true;
+    await db.Init();
+    if (!options.kart && !options.track && !options.arena)
+        options.everything = true;
 
-    //check if it already installed
-    //const installedIds = db.installedKartIds.concat(db.installedTrackIds);
     for (const query of ids) {
         if (db.installed.some(addon => addon.id == query)) {
             console.log(`Addon with id ${query} is already installed. Skipping`);
@@ -83,11 +92,11 @@ async function installAddons(ids: string[]) {
         }
 
         let addon = undefined;
-        if (addon == undefined && (options.k || options.e))
+        if (addon == undefined && (options.kart || options.everything))
             addon = db.karts.find(kart => kart.id == query);
-        if (addon == undefined && (options.t || options.e))
+        if (addon == undefined && (options.track || options.everything))
             addon = db.tracks.find(track => track.id == query);
-        if (addon == undefined && (options.a || options.e))
+        if (addon == undefined && (options.arena || options.everything))
             addon = db.arenas.find(track => track.id == query);
 
         if (addon != undefined) {
@@ -101,8 +110,7 @@ async function installAddons(ids: string[]) {
 }
 
 async function uninstallAddons(ids: string[]) {
-    const options = program.opts();
-    await db.Init(options.r);
+    await db.Init();
 
     for (const id of ids) {
         const addon = db.installed.find(addon => addon.id == id);
@@ -113,8 +121,7 @@ async function uninstallAddons(ids: string[]) {
 }
 
 async function exportInstalled(path: string) {
-    const options = program.opts();
-    await db.Init(options.r);
+    await db.Init();
     let output = "";
 
     for (const addon of db.installed) {
@@ -125,8 +132,7 @@ async function exportInstalled(path: string) {
 }
 
 async function importInstalled(path: string) {
-    const options = program.opts();
-    await db.Init(options.r);
+    await db.Init();
 
     const text = (readFileSync(path)).toString();
     const ids = text.replace("\r", "").split('\n');
@@ -141,13 +147,13 @@ program
     .command("refresh")
     .description("Refreshes the addon database")
     .action(async () => {
-        await db.Init(true);
+        await db.Init();
     });
 
 program
-    .command("search <name>")
+    .command("search [options] ")
     .description("Searches for karts, tracks and arenas for <name>")
-    .action((name) => { search(name); });
+    .action(search);
 
 program
     .command("info <id>")
@@ -180,13 +186,19 @@ program
     .action(importInstalled);
 
 program
-    .option("-k", "Adds karts into searching list ", false)
-    .option("-t", "Adds tracks into searching list", false)
-    .option("-a", "Adds arenas into searching list", false)
-    .option("-e", "Adds everything into searching list", false)
-    .option("-f", "Set filter to Featured", false)
-    .option("-r", "Refreshes files before command (like running the refresh command)", false)
-    .option("-i", "Searches packages and then installs everything in the list");
+    .option("-k|--kart", "Consider karts into searching list ")
+    .option("-t|--track", "Consider tracks into searching list")
+    .option("-a|--arena", "Consider arenas into searching list")
+    .addOption(new Option("-e|--everything", "Consider everything into searching list")
+        .implies({
+            kart: true,
+            track: true,
+            arena: true
+        }))
+    .option("-f|--featured", "Set filter to Featured")
+    .option("-n|--name <name>", "Set filter to specified name")
+    .option("-i", "Searches packages and then installs everything in the list ")
+    .addHelpText("after", "\nIf the flags -k, -t, -a or -e are not specified, everything will be selected by default");
 
 
 program.parse();
